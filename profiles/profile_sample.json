@@ -1,0 +1,32 @@
+{
+  "profiles": [
+    {
+      "name": "manifest_sample",
+      "type": "notes.manifest",
+      "manifest": "manifest/dbs_manifest.json",
+      "out": "dist/",
+      "state": "dist/state",
+      "formats": [
+        "html"
+      ],
+      "keep_dxl": false
+    },
+    {
+      "name": "normalize_sample",
+      "type": "normalize",
+      "inputs": [
+        "tests/data/dxl"
+      ],
+      "out": "dist/json"
+    },
+    {
+      "name": "render_sample",
+      "type": "render",
+      "inputs": [
+        "dist/json"
+      ],
+      "out": "dist/rendered",
+      "fmt": "html"
+    }
+  ]
+}

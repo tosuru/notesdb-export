@@ -1,0 +1,51 @@
+
+# {{ subject or "Document" }}
+
+{% if meta.unid %}
+## メタ情報
+*UNID:* `{{ meta.unid }}`
+{% endif %}
+
+## 本文
+
+{% if body_text %}
+{% for para in body_text.split('\n\n') %}
+{{ para.replace('\n','  \n') }}
+
+{% endfor %}
+{% else %}
+_（本文なし）_
+{% endif %}
+
+## Notesリンク
+
+{% if notes_links %}
+{% for ln in notes_links %}
+- `{{ ln.raw }}`{% if ln.unid %} （UNID: `{{ ln.unid }}`）{% endif %}
+{% endfor %}
+{% else %}
+_（リンクなし）_
+{% endif %}
+
+## HTTPリンク
+
+{% if http_links %}
+{% for ln in http_links %}
+- <{{ ln.raw }}>
+{% endfor %}
+{% else %}
+_（リンクなし）_
+{% endif %}
+
+
+## 付録：その他のフィールド一覧
+
+{% if appendix_rows %}
+| フィールド名 | 型 | プレビュー |
+|---|---|---|
+{% for r in appendix_rows %}
+| {{ r.name }} | {{ r.type }} | {{ r.preview | replace('|','\|') }} |
+{% endfor %}
+{% else %}
+_（出力対象のフィールドはありません）_
+{% endif %}

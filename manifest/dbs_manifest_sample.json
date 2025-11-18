@@ -1,0 +1,22 @@
+[
+  {
+    "title": "mydb1",
+    "server": "XXXXX02/XXXXX1",
+    "db_file": "XXXXX1/XXX/DocXXXXX.nsf"
+  },
+    {
+    "title": "mydb2",
+    "server": "XXXXXX02/XXXXX1",
+    "db_file": "XXXXX1/XX0/DocXXXXX.nsf",
+    "view_name": "($All)"
+  },
+  {
+    "title": "mydb3",
+    "server": "XXXXXX02/XXXXX1",
+    "db_file": "XXXXX1/XX0/DocXXXXX.nsf",
+    "views": [
+      "($All)",
+      "全ての文書"
+    ]
+  }
+]
