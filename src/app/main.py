@@ -630,7 +630,7 @@ def _handle_render(args):
                 else:
                     # out_path = out_dir / f"{json_path.stem}.{ext}"
                     # .normalized を含む場合は削除
-                    out_path = out_path.parent / \
+                    out_path = out_dir / \
                         json_path.stem.replace(".normalized", f".{ext}")
 
                 # 書き込み（バイナリ or テキスト）

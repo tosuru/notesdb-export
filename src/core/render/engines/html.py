@@ -746,6 +746,18 @@ class HtmlRenderer(BaseRenderer):
             view = notes.get("view")  # 任意
             if not (server and replica and unid):
                 return None
+
+            import re
+            m = re.match(r"(?:CN=)?([^/]+)", server, re.IGNORECASE)
+            if m:
+                server = m.group(1)
+            
+            domain_suffix = os.getenv("NOTES_DOMAIN_SUFFIX", "")
+            if domain_suffix and "." not in server:
+                if not domain_suffix.startswith("."):
+                    domain_suffix = "." + domain_suffix
+                server = f"{server}{domain_suffix}"
+
             path = f"{server}/{replica}"
             if view:
                 path += f"/{view}"
@@ -772,7 +784,7 @@ class HtmlRenderer(BaseRenderer):
     # --- 追加: Box検索URLビルダ ---
     def _get_box_search_base(self) -> str:
         # 末尾に query= を含んでいる形を想定。含まれていなくても ?query= を付与して使う。
-        return os.getenv("BOX_SEARCH_BASE", "https://isuzu.app.box.com/folder/0/search?query=")
+        return os.getenv("BOX_SEARCH_BASE", "https://app.box.com/folder/0/search?query=")
 
     def _build_box_search_url(self, query_text: str) -> str:
         base = self._get_box_search_base()
@@ -811,8 +823,6 @@ class HtmlRenderer(BaseRenderer):
         """'link' トークン -> a要素。Notesリンクのみ Box検索を追加。すべて別タブで開く。"""
         # --- 修正版: _handle_link ---    既存: 'link' の拡張（2本目の「Box検索」を追加）
         style_css, tags = self._style_from_run(run)
-        label = run.get('label', run.get('href', ''))
-
         # 元の href を保持して「Notes判定」に使う
         original_href = run.get('href', '') or ''
         notes_meta = run.get('notes') or {}
@@ -820,6 +830,12 @@ class HtmlRenderer(BaseRenderer):
         # --- Notes判定：notes メタがある or href が Notes://
         is_notes_link = bool(notes_meta) or (isinstance(
             original_href, str) and original_href.startswith("Notes://"))
+
+        label = run.get('label', original_href)
+        # カンマ区切りのままだとHTML上で下線が途切れるため、Notes関連リンクではスペースに置換する
+        # また、ユーザーの要望によりBox検索と同様のアイコンを先頭に付与
+        if is_notes_link and isinstance(label, str):
+            label = "📝" + label.replace(", ", " ")
 
         # --- NotesリダイレクトURLの構築（既存ロジック）
         href = original_href
@@ -868,7 +884,7 @@ class HtmlRenderer(BaseRenderer):
                     "label": "🔎Box検索",
                     "style": "",
                     "tags": [],
-                    "attributes": self._default_link_attrs()
+                    "attributes": {**self._default_link_attrs(), "style": "margin-left: 0.75rem; text-decoration: none;"}
                 })
 
     # def _handle_link(self, run: Dict[str, Any]):
