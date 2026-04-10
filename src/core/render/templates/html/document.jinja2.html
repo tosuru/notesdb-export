@@ -31,9 +31,10 @@
         small,.muted{ color:var(--muted) }
         a{ color:inherit; word-break:break-word }
 
-        .indent-1{ margin-left:1.5rem; border-left:3px solid var(--border); }
-        .indent-2{ margin-left:2.0rem; border-left:3px solid var(--border); }
-        .indent-3{ margin-left:2.5rem; border-left:3px solid var(--border); }
+        .indent-1{ margin-left:1.5rem; }
+        .indent-2{ margin-left:3.0rem; }
+        .indent-3{ margin-left:4.5rem; }
+        .document-body{ padding-left: 1.5rem; padding-right: 1rem; }
         
         {# ========= Lists ========= #}
         ul,ol{ margin:.4rem 0 .6rem; padding-left:1.25rem }
@@ -145,8 +146,8 @@
                         {% if item.attributes %}
                         {% for k, v in item.attributes.items() if v and k != 'download' %} {{ k }}="{{ v | e }}"{% endfor %}
                         {% endif %}
-                        {% if item.style %} style="{{ item.style | e }}"{% endif %}>
-                        <img src="{{ item.icon_src | e }}" alt="icon" class="attachment-icon"><br>{{- item.label | e -}}
+                        style="display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: #333; {% if item.style %}{{ item.style | e }}{% endif %}">
+                        <img src="{{ item.icon_src | e }}" alt="icon" class="attachment-icon" style="width: 36px; height: 36px;">{{- item.label | e -}}
                     </a>
                 {%- elif item.type == 'br' -%}
                     <br>

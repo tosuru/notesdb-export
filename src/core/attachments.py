@@ -53,15 +53,17 @@ ICON_DIR_NAME = "icons"  # attachments/icons/
 
 def _strip_seq_suffix(fname: str) -> str:
     """
-    '設計要件書_v4.1.4.002.md' -> '設計要件書_v4.1.4.md'
+    '設計要件書_v4.1.4.002.002.md' -> '設計要件書_v4.1.4.md'
     Remove dot-number (.NNN) right before extension, if present.
     """
     p = Path(fname)
     stem, suf = p.stem, p.suffix
     import re
-    m = re.match(r"^(?P<base>.+?)\.(?P<num>\d{3})$", stem)
+    m = re.match(r"^(?P<base>.*?)(?:\.\d{3})+$", stem)
     if m:
-        return f"{m.group('base')}{suf}"
+        base = m.group('base')
+        if base: # Make sure we don't completely strip a file named just .001.ext (though unlikely)
+            return f"{base}{suf}"
     return fname
 
 
@@ -131,7 +133,8 @@ def _ensure_extension_icon(
     safe_ext = (ext or "unknown").lstrip(".").lower()
 
     # (A) v1.5-dev: 物理的な書き込み先パス
-    icon_root_dir.mkdir(parents=True, exist_ok=True)
+    # [v1.5-dev] SVGインラインレンダリングに移行したため、空の `icons/` ディレクトリ作成もスキップ
+    # icon_root_dir.mkdir(parents=True, exist_ok=True)
     icon_physical_path = icon_root_dir / f"{safe_ext}.gif"
 
     if not icon_physical_path.exists():
@@ -151,12 +154,15 @@ def _ensure_extension_icon(
             icon_data = _GIF_PLACEHOLDER
             logger.debug(f"Using placeholder icon for .{safe_ext}")
 
-        try:
-            icon_physical_path.write_bytes(icon_data)
-            logger.debug(f"Wrote icon: {icon_physical_path}")
-        except Exception as e:
-            logger.warning(
-                f"Could not create icon {icon_physical_path}: {e}")
+        # [v1.5-dev] SVGインラインレンダリングに移行したため、旧来の物理GIFアイコンファイルの出力動作をカット
+        # (機能とJSONへのパス構造マッピング処理は維持しつつ、不要なディスクI/Oを削減するため)
+        # try:
+        #     icon_physical_path.write_bytes(icon_data)
+        #     logger.debug(f"Wrote icon: {icon_physical_path}")
+        # except Exception as e:
+        #     logger.warning(
+        #         f"Could not create icon {icon_physical_path}: {e}")
+        pass
 
     # (A) v1.5-dev: モードに基づいて JSON に書き込む相対パスを決定
     icon_rel_path: str
@@ -960,7 +966,8 @@ def _update_runs_paths(runs: Optional[List[Dict[str, Any]]], attachment_map: Dic
 # --- Main Function ---
 def extract_and_save_json_paths(dxl_path: Path,
                                 initial_json_path: Path,
-                                attachment_output_dir: Path) -> Optional[Dict[str, Any]]:
+                                attachment_output_dir: Path,
+                                fallback_att_dir: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     """
     1) Load initial normalized JSON (from parser.py).
     2) Load DXL for Base64 data.
@@ -979,28 +986,83 @@ def extract_and_save_json_paths(dxl_path: Path,
         logger.error(f"Failed to decode JSON from: {initial_json_path}")
         return None
 
+    # Deep copy to avoid modifying original when we need it in fail-safe
+    updated_json = copy.deepcopy(initial_json)
+
     try:
         try:
             dxl_text = dxl_path.read_text(encoding='utf-8')
         except UnicodeDecodeError:
-            dxl_text = dxl_path.read_text(
-                encoding='utf-8-sig', errors='ignore')
+            dxl_text = dxl_path.read_text(encoding='utf-8-sig', errors='ignore')
         dxl_text = _sanitize_xml_text(dxl_text)
-        try:
-            root = ET.fromstring(dxl_text)
-        except MemoryError as e_mem:
-            logger.error(f"DXL parsing MemoryError for {dxl_path}: {e_mem}")
-            return None
-        except ET.ParseError as e_inner:
-            logger.error(f"Failed to parse DXL XML from {dxl_path}: {e_inner}")
-            return None
+        root = ET.fromstring(dxl_text)
         ns = _ns_from_root(root)
     except FileNotFoundError:
         logger.error(f"DXL file not found at: {dxl_path}")
         return updated_json
+    except MemoryError as e_mem:
+        logger.error(f"DXL parsing MemoryError for {dxl_path}: {e_mem}")
+        logger.warning("Proceeding with fallback attachment linking without DXL parsing due to MemoryError.")
+        
+        fallback_files = []
+        if fallback_att_dir and fallback_att_dir.is_dir():
+            fallback_files = [f for f in fallback_att_dir.iterdir() if f.is_file()]
+            # Force copy all extracted fallback files just in case the JSON matching fails
+            attachment_output_dir.mkdir(parents=True, exist_ok=True)
+            import shutil
+            for f_path in fallback_files:
+                try:
+                    shutil.copy2(str(f_path), str(attachment_output_dir / f_path.name))
+                except OSError:
+                    pass
 
-    # Deep copy to avoid modifying original
-    updated_json = copy.deepcopy(initial_json)
+        attachments_out = []
+        for att in updated_json.get("attachments", []) or []:
+            meta = att
+            t = meta.get("type")
+            ref = meta.get("ref", {}) or {}
+            meta_name = meta.get("name")
+            ref_name = ref.get("name") or ""
+            
+            if t == "file" and fallback_files:
+                expected_name = meta_name or ""
+                matched_file = None
+                
+                # 1. Exact match
+                for fb in fallback_files:
+                    if fb.name == ref_name or fb.name == expected_name:
+                        matched_file = fb
+                        break
+                
+                # 2. Fuzzy match to bypass COM vs DXL naming discrepancies
+                if not matched_file:
+                    for fb in fallback_files:
+                        fb_stem = fb.stem.replace(" ","").replace("　","").lower()
+                        ex_stem = Path(expected_name).stem.replace(" ","").replace("　","").lower()
+                        if fb_stem and ex_stem and (fb_stem in ex_stem or ex_stem in fb_stem):
+                            if fb.suffix.lower() == Path(expected_name).suffix.lower():
+                                matched_file = fb
+                                break
+                                
+                if matched_file:
+                    meta["source_path"] = str(matched_file)
+                    meta["content_path"] = str(Path("attachments") / matched_file.name).replace("\\\\", "/").replace("\\", "/")
+                    meta["saved_name"] = matched_file.name
+                    meta["icon_path"] = f"attachments/{ICON_DIR_NAME}/file.gif"
+                    
+            attachments_out.append(meta)
+        
+        updated_json["attachments"] = attachments_out
+        att_map = {m.get("name"): m for m in attachments_out if m.get("name")}
+        for field_data in updated_json.get("fields", {}).values():
+            if isinstance(field_data, dict) and field_data.get("type") == "richtext":
+                runs = field_data.get("runs")
+                if runs:
+                    _update_runs_paths(runs, att_map)
+        return updated_json
+    except ET.ParseError as e_inner:
+        logger.error(f"Failed to parse DXL XML from {dxl_path}: {e_inner}")
+        return updated_json
 
     # v1.4: Displayname source map from runs (key = stripped displayname)
     displayname_map = _collect_attachmentref_displaynames(updated_json)
@@ -1085,16 +1147,35 @@ def extract_and_save_json_paths(dxl_path: Path,
         meta_name = meta.get("name")
 
         try:
-            # 1. Find Base64 data node in DXL (inline picture / $FILE)
+            # 1. Find Base64 data node in DXL (inline picture / $FILE), or use fallback path
             # (DXL アイコンは ext_icon_b64_map で処理済みなのでここでは不要)
             if t == "file" or (t == "image" and ref.get("element") == "picture"):
-                data_node, file_ext = _find_base64_data_node(root, ns, meta)
-                if data_node is not None and data_node.text:
-                    meta["bytes_b64"] = data_node.text.strip()
-                # ★ 修正 (v1.4.6): parser.py が name に拡張子を付けない場合があるため、ここで補完
-                if t == "image" and file_ext and "." not in (meta.get("name") or ""):
-                    meta["name"] = f"{meta_name or 'inline_pic'}.{file_ext}"
-                    meta["file_ext"] = file_ext  # extract_and_save で使うため
+                fallback_found = False
+                expected_name = meta_name or ""
+                ref_name = ref.get("name") or ""
+                
+                if fallback_att_dir:
+                    # 1. 優先: DXLから抽出されたそのままの物理ファイル名 (ref_name)
+                    if ref_name and (fallback_att_dir / ref_name).is_file():
+                        meta["source_path"] = str(fallback_att_dir / ref_name)
+                        fallback_found = True
+                        logger.info(f"Using COM-extracted fallback file by ref_name: {ref_name}")
+                    # 2. 次点: 解析された表示名 (expected_name)
+                    elif expected_name and (fallback_att_dir / expected_name).is_file():
+                        meta["source_path"] = str(fallback_att_dir / expected_name)
+                        fallback_found = True
+                        logger.info(f"Using COM-extracted fallback file by expected_name: {expected_name}")
+                        
+                if fallback_found:
+                    logger.debug(f"Fallback check pass for {expected_name or ref_name}.")
+                if not fallback_found:
+                    data_node, file_ext = _find_base64_data_node(root, ns, meta)
+                    if data_node is not None and data_node.text:
+                        meta["bytes_b64"] = data_node.text.strip()
+                    # ★ 修正 (v1.4.6): parser.py が name に拡張子を付けない場合があるため、ここで補完
+                    if t == "image" and file_ext and "." not in (meta.get("name") or ""):
+                        meta["name"] = f"{meta_name or 'inline_pic'}.{file_ext}"
+                        meta["file_ext"] = file_ext  # extract_and_save で使うため
 
             # 2. Persist & set content_path/saved_name (v1.4 logic)
             if t == "file":
@@ -1144,6 +1225,37 @@ def extract_and_save_json_paths(dxl_path: Path,
     # (v1.5-dev) Slim the JSON by stripping payloads and adding file hashes
     for _m in attachments_out:
         _finalize_attachment_meta(_m, attachment_output_dir)
+
+    # --- Global Fallback Salvage ---
+    # Catch any COM-extracted files that were completely missed by the DXL XML parsing 
+    # (e.g. if OmitRichTextAttachments stripped the $FILE items entirely).
+    if fallback_att_dir and fallback_att_dir.is_dir():
+        attachment_output_dir.mkdir(parents=True, exist_ok=True)
+        import shutil
+        saved_sources = {m.get("source_path") for m in attachments_out if m.get("source_path")}
+        
+        for fb_file in fallback_att_dir.iterdir():
+            if not fb_file.is_file(): continue
+            if str(fb_file) in saved_sources: continue  # Already processed by exact/fuzzy match
+            
+            save_path = attachment_output_dir / fb_file.name
+            try:
+                shutil.copy2(str(fb_file), str(save_path))
+            except OSError:
+                continue
+            
+            # Create a fallback metaclass for the stranded file
+            new_meta = {
+                "type": "file",
+                "name": fb_file.name,
+                "source_path": str(fb_file),
+                "content_path": str(Path("attachments") / fb_file.name).replace("\\\\", "/").replace("\\", "/"),
+                "saved_name": fb_file.name,
+                "icon_path": f"attachments/{ICON_DIR_NAME}/file.gif",
+            }
+            # Put in map to be referenced by runs that might loosely call for this name
+            processed_attachment_map[fb_file.name] = new_meta
+            attachments_out.append(new_meta)
 
     updated_json["attachments"] = attachments_out
 

@@ -25,7 +25,8 @@ try:
     )
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT, TA_JUSTIFY
-    from reportlab.lib.units import inch, pt
+    from reportlab.lib.units import inch
+    pt = 1.0
     from reportlab.lib import colors
     from reportlab.lib.utils import ImageReader  # 画像サイズ取得用
     from reportlab.pdfbase import pdfmetrics
@@ -98,6 +99,7 @@ def parse_length_rl(length_str: Optional[str], default_unit=inch) -> Optional[fl
 
 
 # --- Font Registration ---
+import sys
 DEFAULT_FONT_NAME = "NotoSansJP"  # ReportLab内で使用するフォント名
 FALLBACK_FONT_NAME = "Helvetica"  # フォントが見つからない場合の代替
 

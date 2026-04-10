@@ -54,7 +54,7 @@ def _ensure_safe_name(s: str | None) -> str:
     if out:
         parts = [part for part in out.split('_') if part]
         out = '_'.join(parts)
-    out = out[:120]
+    out = out[:50]
     return out if out else "_sanitized_"
 
 
@@ -145,7 +145,8 @@ def process_one(
     dxl_path: Path,  # Takes DXL file path
     out_base: Path,
     db_title: str,
-    formats: List[str]
+    formats: List[str],
+    fallback_att_dir: Optional[Path] = None
 ) -> Optional[Path]:
     """
     Processes a single DXL file through the full pipeline.
@@ -262,7 +263,8 @@ def process_one(
         updated_json_dict = extract_and_save_json_paths(
             dxl_path=dxl_path,
             initial_json_path=initial_json_filepath,
-            attachment_output_dir=attachment_dir
+            attachment_output_dir=attachment_dir,
+            fallback_att_dir=fallback_att_dir
         )
         if updated_json_dict is None:
             raise RuntimeError("Attachment extraction returned None.")
@@ -428,7 +430,11 @@ def run_unified(
                 doc = client.get_document_by_unid(unid)
                 if not doc:
                     raise ValueError(f"No doc {unid}")
-                dxl = export_document_as_dxl(doc)
+                
+                # Pre-determine fallback_att_dir
+                fallback_att_dir = dxl_dir / f"{unid}_fallback_attachments"
+                dxl = export_document_as_dxl(doc, fallback_att_dir=str(fallback_att_dir))
+                
                 if not dxl:
                     raise RuntimeError("Empty DXL.")
                 if keep_dxl:
@@ -450,8 +456,10 @@ def run_unified(
                 if dxl_path is None or not dxl_path.exists():
                     raise RuntimeError(f"DXL path invalid {unid}")
                 # Pass the correct db_title from config
+                
+                # Pass fallback_att_dir to process_one
                 outdir = process_one(dxl_path, out_base, db_config.get(
-                    "title", db_title_safe), formats)
+                    "title", db_title_safe), formats, fallback_att_dir=fallback_att_dir)
                 if outdir:
                     progress.append(db_file, unid, "done",
                                     try_count=try_count + 1, out=str(outdir))

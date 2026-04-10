@@ -216,6 +216,8 @@ class HtmlRenderer(BaseRenderer):
         self._tab_group_counter = 0
         # NEW v1.6: track structural blank emission to collapse multiple empty paragraphs
         self._last_emitted_was_blank = False
+        # [修正 14] 最後に有効だったインデントクラスを保持（Notesが添付ファイルの直前に空のparを挿入してくる対策）
+        self._last_meaningful_indent_cls = ""
 
         # --- [修正 4.A] v1.4対応: 添付ファイル辞書 (content_path -> icon_path) を構築 ---
         self._attachment_icon_map = self._build_icon_map()
@@ -239,6 +241,7 @@ class HtmlRenderer(BaseRenderer):
         # [改善案 7] タブグループカウンターを共有 (ネストした場合にインクリメントするため)
         # ただし、サブレンダラーはセル内などで使われるため、親のカウンターを共有するのが正しい
         sub._tab_group_counter = parent_renderer._tab_group_counter
+        sub._last_meaningful_indent_cls = parent_renderer._last_meaningful_indent_cls
         return sub
 
     # --- [提案2] BaseRenderer.render をオーバーライドして pretty 引数を追加 ---
@@ -587,13 +590,17 @@ class HtmlRenderer(BaseRenderer):
             # --- 通常の段落として開始 ---
             self._current_list_block = None  # 現在のリストブロックへの参照をクリア
 
+            indent_cls = self._indent_class_from_par(par_style).strip()
+            if indent_cls:
+                self._last_meaningful_indent_cls = indent_cls
+
             # 新しい <p> ブロックを作成
             self._current_block = {
                 "type": "p",
                 "content": [],  # このリストに span, a, img などが入る
                 "style": css_style,  # <p style="...">
                 # indent class if any
-                "attributes": {"class": (self._indent_class_from_par(par_style).strip() or None)}
+                "attributes": {"class": (indent_cls or None)}
             }
             # <p> を body_elements に追加
             self.output['body_elements'].append(self._current_block)
@@ -1052,16 +1059,24 @@ class HtmlRenderer(BaseRenderer):
                 "attributes": {"download": name, **self._default_link_attrs()}
             }
 
-        # [修正 11] attachmentref は常にそれ自身で一つの段落 (<p>) を構成すると定義
+        # [修正 13] 直前の空ブロックの影響を受けないよう、コンテキストから最新のスタイルを直接引継ぎ、独立した段落を作成する
+        inherited_class = "attachment-paragraph"
+        indent_cls = self._indent_class_from_par(self.context.current_par_style).strip()
+        # [修正 14] 直前のパラグラフがインデントを持たない（Notesが直前に空のparを出す）場合、最後に有効だったインデントにフォールバック
+        if not indent_cls and self._last_meaningful_indent_cls:
+            indent_cls = self._last_meaningful_indent_cls
+
+        if indent_cls:
+            inherited_class += f" {indent_cls}"
+
         attachment_para_block = {
             "type": "p",
-            "content": [content_item],  # この段落には attachment_link のみが入る
+            "content": [content_item],
             "style": block_style,
-            "attributes": {"class": "attachment-paragraph"}  # CSSで装飾用
+            "attributes": {"class": inherited_class}
         }
-
         self.output['body_elements'].append(attachment_para_block)
-        logger.debug(f"Added attachment paragraph block: {display_name}")
+        logger.debug(f"Added attachment paragraph block with class '{inherited_class}': {display_name}")
 
     def _handle_br(self, run: Dict[str, Any]):
         """'br' トークンを 'br' オブジェクトに変換します。(v1.5定義明確化)"""
@@ -1146,57 +1161,172 @@ class HtmlRenderer(BaseRenderer):
             "tags": []
         })
 
-    # --- [修正 4.A] v1.4対応: アイコンマップ構築ヘルパー (initから呼び出し) ---
+    # --- [修正 4.A] アイコンSVGマッピング (インライン埋め込み) ---
+    @staticmethod
+    def _svg_to_data_uri(svg_string: str) -> str:
+        import base64
+        encoded = base64.b64encode(svg_string.strip().encode('utf-8')).decode('ascii')
+        return f"data:image/svg+xml;base64,{encoded}"
+
+    # Fluent Design風のリッチで立体的なSVG定義
+    _SVG_ICONS = {
+        "excel": _svg_to_data_uri("""
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bgExcel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#21A366"/>
+      <stop offset="100%" stop-color="#107C41"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="2" width="24" height="28" rx="3" fill="url(#bgExcel)"/>
+  <path d="M14 8h10v16H14z" fill="#fff" opacity="0.9"/>
+  <path d="M16 11h6v2h-6zm0 4h6v2h-6zm0 4h6v2h-6z" fill="#107C41"/>
+  <rect x="2" y="8" width="14" height="14" rx="2" fill="#185C37"/>
+  <text x="9" y="19" font-family="'Segoe UI', Arial, sans-serif" font-weight="700" font-size="11" fill="#fff" text-anchor="middle">X</text>
+</svg>"""),
+        "word": _svg_to_data_uri("""
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bgWord" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2B579A"/>
+      <stop offset="100%" stop-color="#143A75"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="2" width="24" height="28" rx="3" fill="url(#bgWord)"/>
+  <path d="M14 8h10v16H14z" fill="#fff" opacity="0.9"/>
+  <path d="M16 11h6v2h-6zm0 4h6v2h-6zm0 4h4v2h-4z" fill="#143A75"/>
+  <rect x="2" y="8" width="14" height="14" rx="2" fill="#0D254F"/>
+  <text x="9" y="19" font-family="'Segoe UI', Arial, sans-serif" font-weight="700" font-size="11" fill="#fff" text-anchor="middle">W</text>
+</svg>"""),
+        "ppt": _svg_to_data_uri("""
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bgPpt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#D24726"/>
+      <stop offset="100%" stop-color="#A5351A"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="2" width="24" height="28" rx="3" fill="url(#bgPpt)"/>
+  <path d="M14 8h10v16H14z" fill="#fff" opacity="0.9"/>
+  <path d="M16 10h6v4h-6z" fill="#A5351A"/>
+  <path d="M16 15h4v1h-4zm0 2h4v1h-4z" fill="#A5351A"/>
+  <rect x="2" y="8" width="14" height="14" rx="2" fill="#75220F"/>
+  <text x="9" y="19" font-family="'Segoe UI', Arial, sans-serif" font-weight="700" font-size="11" fill="#fff" text-anchor="middle">P</text>
+</svg>"""),
+        "pdf": _svg_to_data_uri("""
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bgPdf" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F40F02"/>
+      <stop offset="100%" stop-color="#B20B00"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="2" width="24" height="28" rx="3" fill="url(#bgPdf)"/>
+  <path d="M6 10h20v14H6z" fill="#fff" opacity="0.95"/>
+  <text x="16" y="20.5" font-family="'Segoe UI', Arial, sans-serif" font-weight="800" font-size="9" fill="#B20B00" text-anchor="middle" letter-spacing="0.5">PDF</text>
+</svg>"""),
+        "zip": _svg_to_data_uri("""
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bgZip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FBC02D"/>
+      <stop offset="100%" stop-color="#F57F17"/>
+    </linearGradient>
+    <linearGradient id="bgZipTab" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFF176"/>
+      <stop offset="100%" stop-color="#FBC02D"/>
+    </linearGradient>
+  </defs>
+  <path d="M4 10v18h24V10z" fill="url(#bgZip)"/>
+  <path d="M4 10V6c0-1.1.9-2 2-2h8l2 2h8c1.1 0 2 .9 2 2v4z" fill="url(#bgZipTab)"/>
+  <rect x="14" y="10" width="4" height="12" fill="#E65100" opacity="0.3"/>
+  <rect x="14" y="10" width="4" height="1.5" fill="#4B4B4B"/>
+  <rect x="14" y="13" width="4" height="1.5" fill="#4B4B4B"/>
+  <rect x="14" y="16" width="4" height="1.5" fill="#4B4B4B"/>
+  <rect x="13.5" y="18" width="5" height="4" rx="1" fill="#B0BEC5"/>
+  <path d="M14 20h4v1h-4z" fill="#78909C"/>
+</svg>"""),
+        "image": _svg_to_data_uri("""
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bgImg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4FC3F7"/>
+      <stop offset="100%" stop-color="#0288D1"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="4" width="28" height="24" rx="3" fill="url(#bgImg)"/>
+  <circle cx="10" cy="11" r="3" fill="#fff" opacity="0.9"/>
+  <path d="M2 24l8-10 6 8 4-5 10 11v-4H2z" fill="#fff" opacity="0.6"/>
+  <path d="M2 28v-4l8-10 6 8 4-5 10 11v3a3 3 0 01-3 3H5a3 3 0 01-3-3z" fill="#01579B" opacity="0.4"/>
+</svg>"""),
+        "default": _svg_to_data_uri("""
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bgFile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E0E0E0"/>
+      <stop offset="100%" stop-color="#9E9E9E"/>
+    </linearGradient>
+  </defs>
+  <path d="M6 3h12l8 8v17a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z" fill="url(#bgFile)"/>
+  <path d="M18 3v8h8z" fill="#F5F5F5" opacity="0.8"/>
+  <path d="M18 11h8l-8-8v8z" fill="#757575" opacity="0.2"/>
+  <rect x="10" y="16" width="12" height="2" rx="1" fill="#757575" opacity="0.6"/>
+  <rect x="10" y="20" width="12" height="2" rx="1" fill="#757575" opacity="0.6"/>
+  <rect x="10" y="24" width="8" height="2" rx="1" fill="#757575" opacity="0.6"/>
+</svg>""")
+    }
+
+    @classmethod
+    def _map_extension_to_svg(cls, filename: str) -> str:
+        """ファイル名拡張子から直接SVG Data URIを返す"""
+        if not filename:
+            return cls._SVG_ICONS["default"]
+        ext_dot = filename.rfind('.')
+        if ext_dot == -1:
+            return cls._SVG_ICONS["default"]
+        
+        ext = filename[ext_dot+1:].lower()
+        if ext in ['xls', 'xlsx', 'xlsm', 'csv']:
+            return cls._SVG_ICONS["excel"]
+        elif ext in ['ppt', 'pptx', 'pptm']:
+            return cls._SVG_ICONS["ppt"]
+        elif ext in ['doc', 'docx', 'docm', 'rtf']:
+            return cls._SVG_ICONS["word"]
+        elif ext == 'pdf':
+            return cls._SVG_ICONS["pdf"]
+        elif ext in ['zip', 'rar', '7z', 'tar', 'gz']:
+            return cls._SVG_ICONS["zip"]
+        elif ext in ['jpg', 'jpeg', 'png', 'gif', 'bmp']:
+            return cls._SVG_ICONS["image"]
+        
+        return cls._SVG_ICONS["default"]
+
     def _build_icon_map(self) -> Dict[str, str]:
-        """attachments 配列から content_path -> icon_path の辞書を作成 (v1.4)"""
+        """attachments 配列から content_path -> icon_path の辞書を作成"""
         icon_map = {}
         try:
             for att in self.doc.get("attachments", []):
-                # v1.4 仕様: type:"file" の実体ファイルのみが対象
                 if att.get("type") == "file" and att.get("content_path"):
                     content_path = att["content_path"]
-
-                    # 1. icon_path が明示されていればそれを使用 (v1.4)
-                    icon_path = att.get("icon_path")
-
-                    # 2. icon_path がない場合、拡張子からフォールバックパスを生成
-                    if not icon_path:
-                        ext_dot = att.get("name", "").rfind('.')
-                        if ext_dot != -1:
-                            # 拡張子を小文字化
-                            ext = att["name"][ext_dot+1:].lower()
-                            # v1.4仕様に基づき、共有アイコンパスを組み立てる
-                            icon_path = f"attachments/icons/{ext}.gif"
-                        else:
-                            # 拡張子不明
-                            icon_path = "attachments/icons/unknown.gif"
-
-                    icon_map[content_path] = icon_path
+                    name = att.get("name", "")
+                    
+                    # 強制的にファイル名拡張子からSVG Data URIを生成して割り当てる
+                    # 外部GIFへの依存や間違った名前の焼き込み問題を完全に回避
+                    icon_map[content_path] = self._map_extension_to_svg(name)
         except Exception as e:
             logger.warning(
                 f"Failed to build attachment icon map: {e}", exc_info=True)
         return icon_map
 
-    # --- [修正 4.B] v1.4対応: アイコンパス検索ヘルパー (handle_attachmentrefから呼び出し) ---
+    # --- [修正 4.B] v1.4対応: アイコンパス検索ヘルパー ---
     def _find_icon_path(self, content_path: Optional[str], name: str) -> str:
-        """content_path (優先) または name から icon_path を特定する"""
-
-        # 1. 事前構築したマップから検索 (content_path がキー)
+        """content_path (優先) または name から SVG Data URI を特定する"""
+        
         if content_path and content_path in self._attachment_icon_map:
             return self._attachment_icon_map[content_path]
 
-        # 2. マップにない場合 (フォールバックで name から推測)
-        ext_dot = name.rfind('.')
-        if ext_dot != -1:
-            ext = name[ext_dot+1:].lower()
-            # 既知の拡張子であればパスを推測 (マップ構築ロジックと重複するが安全のため)
-            if ext in ['pdf', 'xlsx', 'docx', 'pptx', 'md', 'txt', 'zip', 'gif', 'jpg', 'png']:
-                return f"attachments/icons/{ext}.gif"
-
-        # 不明な場合は unknown.gif
-        logger.debug(
-            f"Could not find icon for '{content_path}' (name: '{name}'), using unknown.gif")
-        return "attachments/icons/unknown.gif"
+        # マップにない場合もファイル名からSVG Data URIを生成
+        return self._map_extension_to_svg(name)
 
     # --- ヘルパーメソッド ---
 
@@ -1375,10 +1505,17 @@ class HtmlRenderer(BaseRenderer):
         used = set(layout.get("used_in_body", []) or [])
         logger.debug(f"Appendix: allowlist={allow}, used_in_body={used}")
 
+        # 無意味なバイナリや文字化けの原因となる、システム・セキュリティ系のフィールドを除外
+        ignore_fields = {
+            "LastScannedVersionCheck",
+            "$UpdatedBy", "$Revisions", "$MessageID",
+            "$KeepPrivate", "sign", "$Writers", "Categories"
+        }
+
         processed_names = set()
 
         for name, meta in fields.items():
-            if name in allow or name in used or name in processed_names:
+            if name in allow or name in used or name in processed_names or name in ignore_fields or name.startswith("$"):
                 continue
 
             ftype = meta.get("type", "unknown")

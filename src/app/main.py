@@ -692,7 +692,10 @@ def _handle_run_profile(args, parser):  # parser を受け取る
 
     try:
         logging.info(f"--- Running profile: {name} ---")
-        _exec_profile(profs[name])
+        p_data = profs[name]
+        if getattr(args, 'retry_errors_only', False):
+            p_data['retry_errors_only'] = True
+        _exec_profile(p_data)
         logging.info(f"--- Profile finished: {name} ---")
     except Exception as e:
         logging.error(f"Profile execution failed: {e}", exc_info=True)
@@ -727,6 +730,8 @@ def main():
                             help="Do not save intermediate DXL files (default: save)")
     p_manifest.add_argument("--limit", type=int, default=None,
                             help="Limit processing to N documents per DB (default: no limit)")
+    p_manifest.add_argument("--retry-errors", dest="retry_errors_only", action="store_true",
+                            help="Retry only documents with 'error' status in progress file")
     p_manifest.set_defaults(func=_handle_run_manifest)
 
     # A-2. run-single-db
@@ -748,6 +753,8 @@ def main():
                           help="Do not save intermediate DXL files (default: save)")
     p_single.add_argument("--limit", type=int, default=None,
                           help="Limit processing to N documents (default: no limit)")
+    p_single.add_argument("--retry-errors", dest="retry_errors_only", action="store_true",
+                          help="Retry only documents with 'error' status in progress file")
     p_single.set_defaults(func=_handle_run_single_db)
 
     # B-1. export
@@ -808,6 +815,8 @@ def main():
                         help="Path to profiles JSON file")
     p_prof.add_argument("--name", "-n", default=None,
                         help="Profile name to run (if omitted, list & prompt when TTY)")
+    p_prof.add_argument("--retry-errors", dest="retry_errors_only", action="store_true",
+                        help="Retry only documents with 'error' status in progress file")
     p_prof.set_defaults(func=lambda args: _handle_run_profile(args, parser))
 
     # --- 便宜ショートカット (既存維持) ---
